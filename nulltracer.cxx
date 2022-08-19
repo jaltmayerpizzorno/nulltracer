@@ -43,13 +43,7 @@ NullTracer_call(PyObject* self, PyObject* args, PyObject* kwargs) {
     return self;
 }
 
-static PyObject*
-NullTracer_call_count(NullTracerObject* self, PyObject* Py_UNUSED(ignored)) {
-    return PyLong_FromLong(self->count);
-}
-
 static PyMethodDef NullTracer_methods[] = {
-    {"count", (PyCFunction)NullTracer_call_count, METH_NOARGS, "Returns the number of times called"},
     {NULL}
 };
 
@@ -65,20 +59,15 @@ static PyTypeObject NullTracerType = {
     .tp_new = NullTracer_new,
 };
 
-PyObject*
-nulltracer_settrace(PyObject* self, PyObject* const* args, Py_ssize_t nargs) {
-    if (nargs < 1) {
-        PyErr_SetString(PyExc_Exception, "Missing argument(s)");
-        return NULL;
-    }
+static NullTracerObject* _tracer = nullptr;
 
-    PyEval_SetTrace(Nulltracer_trace, args[0]);
-    Py_RETURN_NONE;
+PyObject*
+nulltracer_get_count(PyObject* self, PyObject* const* args, Py_ssize_t nargs) {
+    return PyLong_FromLong(_tracer ? _tracer->count : 0);
 }
 
-
 static PyMethodDef nulltracer_module_methods[] = {
-    {"settrace",     (PyCFunction)nulltracer_settrace, METH_FASTCALL, "sets up tracing"},
+    {"get_count",     (PyCFunction)nulltracer_get_count, METH_FASTCALL, "returns tracer call count"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -102,12 +91,17 @@ PyInit_nulltracer() {
         return nullptr;
     }
 
+#if 0
     Py_INCREF(&NullTracerType);
     if (PyModule_AddObject(m, "nulltracer", (PyObject*)&NullTracerType) < 0) {
         Py_DECREF(&NullTracerType);
         Py_DECREF(m);
         return nullptr;
     }
+#endif
+
+    _tracer = PyObject_New(NullTracerObject, &NullTracerType);
+    PyEval_SetTrace(Nulltracer_trace, (PyObject*)_tracer);
 
     return m;
 }
