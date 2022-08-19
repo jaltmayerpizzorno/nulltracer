@@ -57,12 +57,12 @@ static PyTypeObject NullTracerType = {
     PyVarObject_HEAD_INIT(NULL, 0)
     .tp_name = "nulltracer.nulltracer",
     .tp_basicsize = sizeof(NullTracerObject),
-    .tp_doc = "Null tracer",
+    .tp_dealloc = NullTracer_dealloc,
     .tp_call = NullTracer_call,
     .tp_flags = Py_TPFLAGS_DEFAULT,
-    .tp_new = NullTracer_new,
-    .tp_dealloc = NullTracer_dealloc,
+    .tp_doc = "Null tracer",
     .tp_methods = NullTracer_methods,
+    .tp_new = NullTracer_new,
 };
 
 PyObject*
@@ -85,9 +85,9 @@ static PyMethodDef nulltracer_module_methods[] = {
 static struct PyModuleDef nulltracer_module = {
     PyModuleDef_HEAD_INIT,
     .m_name = "nulltracer",
-    .m_methods = nulltracer_module_methods,
     .m_doc = NULL, // no documentation
     .m_size = -1,
+    .m_methods = nulltracer_module_methods,
 };
 
 
