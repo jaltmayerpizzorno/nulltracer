@@ -1,12 +1,28 @@
 #define PY_SSIZE_T_CLEAN    // programmers love obscure statements
 #include <Python.h>
+#include <frameobject.h>
 #include <new>
 
 struct NullTracerObject {
     PyObject_HEAD
     int count;
+    PyObject* file_prefix;
 
-    NullTracerObject() : count(0) {}
+    NullTracerObject() : count(0), file_prefix(nullptr) {}
+
+    ~NullTracerObject() {
+        Py_DecRef(file_prefix);
+    }
+
+    bool shouldTrace(PyObject* filename) {
+        if (file_prefix == nullptr) {
+            return true;
+        }
+
+        Py_ssize_t length;
+        const char* prefix = PyUnicode_AsUTF8AndSize(file_prefix, &length);
+        return strncmp(prefix, PyUnicode_AsUTF8(filename), length) == 0;
+    }
 };
 
 static PyObject*
@@ -31,7 +47,12 @@ NullTracer_dealloc(PyObject* self) {
 static int
 Nulltracer_trace(PyObject* self, PyFrameObject *frame, int what, PyObject *arg_unused) {
 //    fprintf(stderr, "called(C)\n");
-    ++reinterpret_cast<NullTracerObject*>(self)->count;
+    NullTracerObject* tracer = reinterpret_cast<NullTracerObject*>(self);
+    ++tracer->count;
+
+    if (what == PyTrace_CALL && !tracer->shouldTrace(frame->f_code->co_filename)) {
+        frame->f_trace_lines = 0;   // disable tracing (for this frame)
+    }
     return 0;   // -1 is error
 }
 
@@ -66,8 +87,30 @@ nulltracer_get_count(PyObject* self, PyObject* const* args, Py_ssize_t nargs) {
     return PyLong_FromLong(_tracer ? _tracer->count : 0);
 }
 
+PyObject*
+nulltracer_set_prefix(PyObject* self, PyObject* const* args, Py_ssize_t nargs) {
+    if (nargs < 1) {
+        PyErr_SetString(PyExc_Exception, "Missing argument(s)");
+        return NULL;
+    }
+    if (!PyUnicode_Check(args[0])) {
+        PyErr_SetString(PyExc_Exception, "Prefix is not a string.");
+        return NULL;
+    }
+    if (_tracer == nullptr) {
+        PyErr_SetString(PyExc_Exception, "No tracer active");
+        return NULL;
+    }
+
+    Py_IncRef(args[0]);
+    _tracer->file_prefix = args[0];
+
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef nulltracer_module_methods[] = {
     {"get_count",     (PyCFunction)nulltracer_get_count, METH_FASTCALL, "returns tracer call count"},
+    {"set_prefix",     (PyCFunction)nulltracer_set_prefix, METH_FASTCALL, "sets tracer file prefix"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -100,7 +143,9 @@ PyInit_nulltracer() {
     }
 #endif
 
-    _tracer = PyObject_New(NullTracerObject, &NullTracerType);
+    // PyObject_New doesn't call tp_new... not sure why.
+    // _tracer = PyObject_New(NullTracerObject, &NullTracerType);
+    _tracer = (NullTracerObject*)NullTracer_new(&NullTracerType, nullptr, nullptr);
     PyEval_SetTrace(Nulltracer_trace, (PyObject*)_tracer);
 
     return m;
