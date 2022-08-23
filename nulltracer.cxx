@@ -72,6 +72,11 @@ Nulltracer_trace(PyObject* self, PyFrameObject *frame, int what, PyObject *arg_u
             frame->f_trace_lines = 0;   // disable tracing (for this frame)
         }
     }
+
+    // XXX we could do (like coveragepy does), in case settrace(gettrace()) is done
+    // XXX Py_INCREF(self);
+    // XXX Py_XSETREF(frame->f_trace, self);
+
     return 0;   // -1 is error
 }
 
