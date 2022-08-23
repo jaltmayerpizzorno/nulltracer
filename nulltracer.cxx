@@ -21,6 +21,7 @@ struct NullTracerObject {
     }
 
     bool shouldTrace(PyObject* filename) {
+        // XXX could use PyUnicode_Tailmatch instead, and skip conversions...
         if (const char* u8name = PyUnicode_AsUTF8(filename)) {
             if (u8name[0] == '<' || u8name[0] == '\0' || strncmp("memory:", u8name, sizeof("memory:")-1)==0) {
                 return false;
