@@ -2,26 +2,41 @@
 #include <Python.h>
 #include <frameobject.h>
 #include <new>
+#include <string>
 
 struct NullTracerObject {
     PyObject_HEAD
     int count;
-    PyObject* file_prefix;
+    std::string abs_prefix;
+    std::string rel_prefix;
 
-    NullTracerObject() : count(0), file_prefix(nullptr) {}
+    NullTracerObject() : count(0) {}
 
-    ~NullTracerObject() {
-        Py_DecRef(file_prefix);
+    ~NullTracerObject() {}
+
+    void setFilePrefix(const char* a_prefix, const char* r_prefix) {
+        abs_prefix = a_prefix;
+        if (r_prefix) rel_prefix = r_prefix;
+        fprintf(stderr, "abs=%s, rel=%s\n", a_prefix, r_prefix ? r_prefix : "(none)");
     }
 
     bool shouldTrace(PyObject* filename) {
-        if (file_prefix == nullptr) {
-            return true;
-        }
+        if (const char* u8name = PyUnicode_AsUTF8(filename)) {
+            if (u8name[0] == '<' || u8name[0] == '\0' || strncmp("memory:", u8name, sizeof("memory:")-1)==0) {
+                return false;
+            }
 
-        Py_ssize_t length;
-        const char* prefix = PyUnicode_AsUTF8AndSize(file_prefix, &length);
-        return strncmp(prefix, PyUnicode_AsUTF8(filename), length) == 0;
+            if (abs_prefix.length()) {
+                if (u8name[0] == '/') {
+                    return strncmp(abs_prefix.c_str(), u8name, abs_prefix.length()) == 0;
+                }
+
+                if (rel_prefix.length()) {
+                    return strncmp(rel_prefix.c_str(), u8name, rel_prefix.length()) == 0;
+                }
+            }
+        }
+        return true;
     }
 };
 
@@ -49,9 +64,12 @@ Nulltracer_trace(PyObject* self, PyFrameObject *frame, int what, PyObject *arg_u
 //    fprintf(stderr, "called(C)\n");
     NullTracerObject* tracer = reinterpret_cast<NullTracerObject*>(self);
     ++tracer->count;
+//    fprintf(stderr, "Tracing %s\n", PyUnicode_AsUTF8(frame->f_code->co_filename));
 
-    if (what == PyTrace_CALL && !tracer->shouldTrace(frame->f_code->co_filename)) {
-        frame->f_trace_lines = 0;   // disable tracing (for this frame)
+    if (what == PyTrace_CALL) {
+        if (!tracer->shouldTrace(frame->f_code->co_filename)) {
+            frame->f_trace_lines = 0;   // disable tracing (for this frame)
+        }
     }
     return 0;   // -1 is error
 }
@@ -59,12 +77,51 @@ Nulltracer_trace(PyObject* self, PyFrameObject *frame, int what, PyObject *arg_u
 static PyObject*
 NullTracer_call(PyObject* self, PyObject* args, PyObject* kwargs) {
 //    fprintf(stderr, "called(Python)\n");
+    PyFrameObject* frame;
+    PyObject* what;
+    PyObject* arg;
+
+    if (!PyArg_ParseTuple(args, "OOO", &frame, &what, &arg)) {
+        return nullptr;
+    }
+
+    if (PyUnicode_CompareWithASCIIString(what, "call") == 0) {
+        // for best speed, switch to C style tracing
+        PyEval_SetTrace(Nulltracer_trace, self);
+    }
+
     ++reinterpret_cast<NullTracerObject*>(self)->count;
+
     Py_INCREF(self);
     return self;
 }
 
+PyObject*
+Nulltracer_get_count(PyObject* self, PyObject* const* args, Py_ssize_t nargs) {
+    return PyLong_FromLong(reinterpret_cast<NullTracerObject*>(self)->count);
+}
+
+PyObject*
+Nulltracer_set_prefix(PyObject* self, PyObject* const* args, Py_ssize_t nargs) {
+    if (nargs < 1) {
+        PyErr_SetString(PyExc_Exception, "Missing argument(s)");
+        return NULL;
+    }
+    if (!PyUnicode_Check(args[0]) || nargs > 1 && !PyUnicode_Check(args[0])) {
+        PyErr_SetString(PyExc_Exception, "Prefix is not a string.");
+        return NULL;
+    }
+
+    const char* abs_prefix = PyUnicode_AsUTF8(args[0]);
+    const char* rel_prefix = nargs > 1 ? PyUnicode_AsUTF8(args[1]) : nullptr;
+    reinterpret_cast<NullTracerObject*>(self)->setFilePrefix(abs_prefix, rel_prefix);
+
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef NullTracer_methods[] = {
+    {"get_count",   (PyCFunction)Nulltracer_get_count, METH_FASTCALL, "returns tracer call count"},
+    {"set_prefix",  (PyCFunction)Nulltracer_set_prefix, METH_FASTCALL, "sets tracer file prefix"},
     {NULL}
 };
 
@@ -80,37 +137,7 @@ static PyTypeObject NullTracerType = {
     .tp_new = NullTracer_new,
 };
 
-static NullTracerObject* _tracer = nullptr;
-
-PyObject*
-nulltracer_get_count(PyObject* self, PyObject* const* args, Py_ssize_t nargs) {
-    return PyLong_FromLong(_tracer ? _tracer->count : 0);
-}
-
-PyObject*
-nulltracer_set_prefix(PyObject* self, PyObject* const* args, Py_ssize_t nargs) {
-    if (nargs < 1) {
-        PyErr_SetString(PyExc_Exception, "Missing argument(s)");
-        return NULL;
-    }
-    if (!PyUnicode_Check(args[0])) {
-        PyErr_SetString(PyExc_Exception, "Prefix is not a string.");
-        return NULL;
-    }
-    if (_tracer == nullptr) {
-        PyErr_SetString(PyExc_Exception, "No tracer active");
-        return NULL;
-    }
-
-    Py_IncRef(args[0]);
-    _tracer->file_prefix = args[0];
-
-    Py_RETURN_NONE;
-}
-
 static PyMethodDef nulltracer_module_methods[] = {
-    {"get_count",     (PyCFunction)nulltracer_get_count, METH_FASTCALL, "returns tracer call count"},
-    {"set_prefix",     (PyCFunction)nulltracer_set_prefix, METH_FASTCALL, "sets tracer file prefix"},
     {NULL, NULL, 0, NULL}
 };
 
@@ -134,19 +161,12 @@ PyInit_nulltracer() {
         return nullptr;
     }
 
-#if 0
     Py_INCREF(&NullTracerType);
     if (PyModule_AddObject(m, "nulltracer", (PyObject*)&NullTracerType) < 0) {
         Py_DECREF(&NullTracerType);
         Py_DECREF(m);
         return nullptr;
     }
-#endif
-
-    // PyObject_New doesn't call tp_new... not sure why.
-    // _tracer = PyObject_New(NullTracerObject, &NullTracerType);
-    _tracer = (NullTracerObject*)NullTracer_new(&NullTracerType, nullptr, nullptr);
-    PyEval_SetTrace(Nulltracer_trace, (PyObject*)_tracer);
 
     return m;
 }

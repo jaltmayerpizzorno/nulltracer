@@ -12,27 +12,38 @@ ap.add_argument('script_or_module_args', nargs=argparse.REMAINDER)
 
 if '-m' in sys.argv: # work around exclusive group not handled properly
     minus_m = sys.argv.index('-m')
-    args = ap.parse_args(sys.argv[1:minus_m+2])
-    args.script_or_module_args = sys.argv[minus_m+2:]
+    opts = ap.parse_args(sys.argv[1:minus_m+2])
+    opts.script_or_module_args = sys.argv[minus_m+2:]
 else:
-    args = ap.parse_args(sys.argv[1:])
+    opts = ap.parse_args(sys.argv[1:])
 
 
 def start_trace():
-    import atexit
     from nulltracer import nulltracer
-    if args.prefix:
-        nulltracer.set_prefix(str(args.prefix))
+    tr = nulltracer.nulltracer()
 
-    atexit.register(lambda: print("tracer called: ", nulltracer.get_count()))
+    if opts.prefix:
+        abs_prefix = opts.prefix.resolve()
+        args = [str(abs_prefix)]
+        if abs_prefix.is_relative_to(Path.cwd()):
+            args.append(str(abs_prefix.relative_to(Path.cwd())))
+        tr.set_prefix(*args)
+
+    import atexit
+    atexit.register(lambda: print("tracer called: ", tr.get_count()))
+
+    import threading
+    threading.settrace(tr)
+    sys.settrace(tr)
 
 
-if args.script:
-    code = compile(Path(args.script).read_text(), args.script, "exec")
-    sys.argv = [args.script, *args.script_or_module_args]
+if opts.script:
+    code = compile(opts.script.read_text(), str(opts.script.resolve()), "exec")
+    sys.argv = [str(opts.script.resolve()), *opts.script_or_module_args]
     start_trace()
     exec(code)
 else:
     import runpy
-    sys.argv = [*args.module, *args.script_or_module_args]
-    runpy.run_module(*args.module, run_name='__main__', alter_sys=True)
+    sys.argv = [*opts.module, *opts.script_or_module_args]
+    start_trace()
+    runpy.run_module(*opts.module, run_name='__main__', alter_sys=True)
